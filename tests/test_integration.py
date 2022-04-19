@@ -1,6 +1,6 @@
 import pytest
 
-from fastjsonschema import JsonSchemaException
+from fastjsonschema import JsonSchemaValueException, compile
 
 
 definition = {
@@ -70,35 +70,35 @@ definition = {
     ),
     (
         [10, 'world', [1], {'a': 'a', 'b': 'b', 'c': 'xy'}, 'str', 5],
-        JsonSchemaException('data[0] must be smaller than 10', value=10, name='data[0]', definition=definition['items'][0], rule='maximum'),
+        JsonSchemaValueException('data[0] must be smaller than 10', value=10, name='data[0]', definition=definition['items'][0], rule='maximum'),
     ),
     (
         [9, 'xxx', [1], {'a': 'a', 'b': 'b', 'c': 'xy'}, 'str', 5],
-        JsonSchemaException('data[1] must be one of [\'hello\', \'world\']', value='xxx', name='data[1]', definition=definition['items'][1], rule='enum'),
+        JsonSchemaValueException('data[1] must be one of [\'hello\', \'world\']', value='xxx', name='data[1]', definition=definition['items'][1], rule='enum'),
     ),
     (
         [9, 'hello', [], {'a': 'a', 'b': 'b', 'c': 'xy'}, 'str', 5],
-        JsonSchemaException('data[2] must contain at least 1 items', value=[], name='data[2]', definition=definition['items'][2], rule='minItems'),
+        JsonSchemaValueException('data[2] must contain at least 1 items', value=[], name='data[2]', definition=definition['items'][2], rule='minItems'),
     ),
     (
         [9, 'hello', [1, 2, 3], {'a': 'a', 'b': 'b', 'c': 'xy'}, 'str', 5],
-        JsonSchemaException('data[2][1] must be string', value=2, name='data[2][1]', definition={'type': 'string'}, rule='type'),
+        JsonSchemaValueException('data[2][1] must be string', value=2, name='data[2][1]', definition={'type': 'string'}, rule='type'),
     ),
     (
         [9, 'hello', [1], {'a': 'a', 'x': 'x', 'y': 'y'}, 'str', 5],
-        JsonSchemaException('data[3] must contain [\'a\', \'b\'] properties', value={'a': 'a', 'x': 'x', 'y': 'y'}, name='data[3]', definition=definition['items'][3], rule='required'),
+        JsonSchemaValueException('data[3] must contain [\'a\', \'b\'] properties', value={'a': 'a', 'x': 'x', 'y': 'y'}, name='data[3]', definition=definition['items'][3], rule='required'),
     ),
     (
         [9, 'hello', [1], {}, 'str', 5],
-        JsonSchemaException('data[3] must contain at least 3 properties', value={}, name='data[3]', definition=definition['items'][3], rule='minProperties'),
+        JsonSchemaValueException('data[3] must contain at least 3 properties', value={}, name='data[3]', definition=definition['items'][3], rule='minProperties'),
     ),
     (
         [9, 'hello', [1], {'a': 'a', 'b': 'b', 'x': 'x'}, None, 5],
-        JsonSchemaException('data[4] must not be valid by not definition', value=None, name='data[4]', definition=definition['items'][4], rule='not'),
+        JsonSchemaValueException('data[4] must NOT match a disallowed definition', value=None, name='data[4]', definition=definition['items'][4], rule='not'),
     ),
     (
         [9, 'hello', [1], {'a': 'a', 'b': 'b', 'x': 'x'}, 42, 15],
-        JsonSchemaException('data[5] must be valid exactly by one of oneOf definition', value=15, name='data[5]', definition=definition['items'][5], rule='oneOf'),
+        JsonSchemaValueException('data[5] must be valid exactly by one definition (2 matches found)', value=15, name='data[5]', definition=definition['items'][5], rule='oneOf'),
     ),
 ])
 def test_integration(asserter, value, expected):
@@ -127,3 +127,18 @@ def test_any_of_with_patterns(asserter):
     }, {
         'hash': 'AAAXXX',
     })
+
+
+def test_swap_handlers():
+    # Make sure that by swapping resolvers, the schemas do not get cached
+    repo1 = {
+        "sch://schema": {"type": "array"}
+    }
+    validator1 = compile({"$ref": "sch://schema"}, handlers={"sch": repo1.__getitem__})
+    assert validator1([1, 2, 3]) is not None
+
+    repo2 = {
+        "sch://schema": {"type": "string"}
+    }
+    validator2 = compile({"$ref": "sch://schema"}, handlers={"sch": repo2.__getitem__})
+    assert validator2("hello world") is not None

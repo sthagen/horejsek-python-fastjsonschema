@@ -1,3 +1,35 @@
+=== 2.15.3 (2022-01-09)
+
+* Fix swapping handlers
+* Fix tests
+* Readable regexps in generated code
+
+
+=== 2.15.2 (2021-12-12)
+
+* Fix nested oneOf and anyOf
+* Fix if-else block in anyOf block
+* Fix uniqueItems including lists or dicts
+* Add option to pass custom formats in generated code
+
+
+=== 2.15.1 (2021-05-05)
+
+* Fix parsing date-time with +hhmm format
+* Fix generating code with custom regular expressions
+
+
+=== 2.15.0 (2021-02-01)
+
+* Fix additional property equal to empty object is the same as True
+* Fix const with "
+* Add const to error message
+* Add JsonSchemaValueException (replacement for JsonSchemaException)
+    * JsonSchemaException is base exception
+    * JsonSchemaDefinitionException no longer inherits from JsonSchemaValueException
+* New option `use_default` to have option turn off default feature (`True` by default to be compatible)
+
+
 === 2.14.5 (2020-08-17)
 
 * Fix missing dependencies

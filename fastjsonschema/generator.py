@@ -1,7 +1,7 @@
 from collections import OrderedDict
 import re
 
-from .exceptions import JsonSchemaException, JsonSchemaDefinitionException
+from .exceptions import JsonSchemaValueException, JsonSchemaDefinitionException
 from .indent import indent
 from .ref_resolver import RefResolver
 
@@ -31,6 +31,7 @@ class CodeGenerator:
     def __init__(self, definition, resolver=None):
         self._code = []
         self._compile_regexps = {}
+        self._custom_formats = {}
 
         # Any extra library should be here to be imported only once.
         # Lines are imports to be printed in the file and objects
@@ -53,7 +54,7 @@ class CodeGenerator:
         self._validation_functions_done = set()
 
         if resolver is None:
-            resolver = RefResolver.from_schema(definition)
+            resolver = RefResolver.from_schema(definition, store={})
         self._resolver = resolver
 
         # add main function to `self._needed_validation_functions`
@@ -83,7 +84,7 @@ class CodeGenerator:
             **self._extra_imports_objects,
             REGEX_PATTERNS=self._compile_regexps,
             re=re,
-            JsonSchemaException=JsonSchemaException,
+            JsonSchemaValueException=JsonSchemaValueException,
         )
 
     @property
@@ -96,19 +97,16 @@ class CodeGenerator:
 
         if not self._compile_regexps:
             return '\n'.join(self._extra_imports_lines + [
-                'from fastjsonschema import JsonSchemaException',
+                'from fastjsonschema import JsonSchemaValueException',
                 '',
                 '',
             ])
-        regexs = ['"{}": re.compile(r"{}")'.format(key, value.pattern) for key, value in self._compile_regexps.items()]
         return '\n'.join(self._extra_imports_lines + [
             'import re',
-            'from fastjsonschema import JsonSchemaException',
+            'from fastjsonschema import JsonSchemaValueException',
             '',
             '',
-            'REGEX_PATTERNS = {',
-            '    ' + ',\n    '.join(regexs),
-            '}',
+            'REGEX_PATTERNS = ' + serialize_regexes(self._compile_regexps),
             '',
         ])
 
@@ -138,13 +136,15 @@ class CodeGenerator:
         self._validation_functions_done.add(uri)
         self.l('')
         with self._resolver.resolving(uri) as definition:
-            with self.l('def {}(data):', name):
+            with self.l('def {}(data, custom_formats={{}}, name_prefix=None):', name):
                 self.generate_func_code_block(definition, 'data', 'data', clear_variables=True)
                 self.l('return data')
 
     def generate_func_code_block(self, definition, variable, variable_name, clear_variables=False):
         """
         Creates validation rules for current definition.
+
+        Returns the number of validation rules generated as code.
         """
         backup = self._definition, self._variable, self._variable_name
         self._definition, self._variable, self._variable_name = definition, variable, variable_name
@@ -152,25 +152,31 @@ class CodeGenerator:
             backup_variables = self._variables
             self._variables = set()
 
-        self._generate_func_code_block(definition)
+        count = self._generate_func_code_block(definition)
 
         self._definition, self._variable, self._variable_name = backup
         if clear_variables:
             self._variables = backup_variables
+
+        return count
 
     def _generate_func_code_block(self, definition):
         if not isinstance(definition, dict):
             raise JsonSchemaDefinitionException("definition must be an object")
         if '$ref' in definition:
             # needed because ref overrides any sibling keywords
-            self.generate_ref()
+            return self.generate_ref()
         else:
-            self.run_generate_functions(definition)
+            return self.run_generate_functions(definition)
 
     def run_generate_functions(self, definition):
+        """Returns the number of generate functions that were executed."""
+        count = 0
         for key, func in self._json_keywords_to_function.items():
             if key in definition:
                 func()
+                count += 1
+        return count
 
     def generate_ref(self):
         """
@@ -192,7 +198,10 @@ class CodeGenerator:
             if uri not in self._validation_functions_done:
                 self._needed_validation_functions[uri] = name
             # call validation function
-            self.l('{}({variable})', name)
+            assert self._variable_name.startswith("data")
+            path = self._variable_name[4:]
+            name_arg = '(name_prefix or "data") + "{}"'.format(path)
+            self.l('{}({variable}, custom_formats, {name_arg})', name, name_arg=name_arg)
 
 
     # pylint: disable=invalid-name
@@ -206,20 +215,24 @@ class CodeGenerator:
 
         .. code-block:: python
 
-            self.l('if {variable} not in {enum}: raise JsonSchemaException("Wrong!")')
+            self.l('if {variable} not in {enum}: raise JsonSchemaValueException("Wrong!")')
 
         When you want to indent block, use it as context manager. For example:
 
         .. code-block:: python
 
             with self.l('if {variable} not in {enum}:'):
-                self.l('raise JsonSchemaException("Wrong!")')
+                self.l('raise JsonSchemaValueException("Wrong!")')
         """
         spaces = ' ' * self.INDENT * self._indent
 
         name = self._variable_name
-        if name and '{' in name:
-            name = '"+"{}".format(**locals())+"'.format(self._variable_name)
+        if name:
+            # Add name_prefix to the name when it is being outputted.
+            assert name.startswith('data')
+            name = '" + (name_prefix or "data") + "' + name[4:]
+            if '{' in name:
+                name = name + '".format(**locals()) + "'
 
         context = dict(
             self._definition or {},
@@ -238,15 +251,31 @@ class CodeGenerator:
 
         .. code-block:: python
 
-            self.l('raise JsonSchemaException("Variable: {}")', self.e(variable))
+            self.l('raise JsonSchemaValueException("Variable: {}")', self.e(variable))
         """
         return str(string).replace('"', '\\"')
 
-    def exc(self, msg, *args, rule=None):
+    def exc(self, msg, *args, append_to_msg=None, rule=None):
         """
+        Short-cut for creating raising exception in the code.
         """
-        msg = 'raise JsonSchemaException("'+msg+'", value={variable}, name="{name}", definition={definition}, rule={rule})'
-        self.l(msg, *args, definition=repr(self._definition), rule=repr(rule))
+        arg = '"'+msg+'"'
+        if append_to_msg:
+            arg += ' + (' + append_to_msg + ')'
+        msg = 'raise JsonSchemaValueException('+arg+', value={variable}, name="{name}", definition={definition}, rule={rule})'
+        definition = self._expand_refs(self._definition)
+        definition_rule = self.e(definition.get(rule) if isinstance(definition, dict) else None)
+        self.l(msg, *args, definition=repr(definition), rule=repr(rule), definition_rule=definition_rule)
+
+    def _expand_refs(self, definition):
+        if isinstance(definition, list):
+            return [self._expand_refs(v) for v in definition]
+        if not isinstance(definition, dict):
+            return definition
+        if "$ref" in definition and isinstance(definition["$ref"], str):
+            with self._resolver.resolving(definition["$ref"]) as schema:
+                return schema
+        return {k: self._expand_refs(v) for k, v in definition.items()}
 
     def create_variable_with_length(self):
         """
@@ -293,3 +322,20 @@ class CodeGenerator:
             return
         self._variables.add(variable_name)
         self.l('{variable}_is_dict = isinstance({variable}, dict)')
+
+
+def serialize_regexes(patterns_dict):
+    # Unfortunately using `pprint.pformat` is causing errors
+    # specially with big regexes
+    regex_patterns = (
+        repr(k) + ": " + repr_regex(v)
+        for k, v in patterns_dict.items()
+    )
+    return '{\n    ' + ",\n    ".join(regex_patterns) + "\n}"
+
+
+def repr_regex(regex):
+    all_flags = ("A", "I", "DEBUG", "L", "M", "S", "X")
+    flags = " | ".join(f"re.{f}" for f in all_flags if regex.flags & getattr(re, f))
+    flags = ", " + flags if flags else ""
+    return "re.compile({!r}{})".format(regex.pattern, flags)

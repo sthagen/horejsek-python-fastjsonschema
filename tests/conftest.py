@@ -9,8 +9,13 @@ from pprint import pprint
 
 import pytest
 
-from fastjsonschema import JsonSchemaException, compile
+from fastjsonschema import JsonSchemaValueException, compile
 from fastjsonschema.draft07 import CodeGeneratorDraft07
+
+
+def pytest_configure(config):
+    config.addinivalue_line("markers", "none")
+    config.addinivalue_line("markers", "benchmark")
 
 
 @pytest.fixture
@@ -25,10 +30,11 @@ def asserter():
         definition.setdefault('$schema', 'http://json-schema.org/draft-04/schema')
 
         validator = compile(definition, formats=formats)
-        if isinstance(expected, JsonSchemaException):
-            with pytest.raises(JsonSchemaException) as exc:
+        if isinstance(expected, JsonSchemaValueException):
+            with pytest.raises(JsonSchemaValueException) as exc:
                 validator(value)
-            assert exc.value.message == expected.message
+            if expected.message is not any:
+                assert exc.value.message == expected.message
             assert exc.value.value == (value if expected.value == '{data}' else expected.value)
             assert exc.value.name == expected.name
             assert exc.value.definition == (definition if expected.definition == '{definition}' else expected.definition)

@@ -75,18 +75,27 @@ Note that there are some differences compared to JSON schema standard:
 API
 ***
 """
+from functools import partial, update_wrapper
 
 from .draft04 import CodeGeneratorDraft04
 from .draft06 import CodeGeneratorDraft06
 from .draft07 import CodeGeneratorDraft07
-from .exceptions import JsonSchemaException, JsonSchemaDefinitionException
+from .exceptions import JsonSchemaException, JsonSchemaValueException, JsonSchemaDefinitionException
 from .ref_resolver import RefResolver
 from .version import VERSION
 
-__all__ = ('VERSION', 'JsonSchemaException', 'JsonSchemaDefinitionException', 'validate', 'compile', 'compile_to_code')
+__all__ = (
+    'VERSION',
+    'JsonSchemaException',
+    'JsonSchemaValueException',
+    'JsonSchemaDefinitionException',
+    'validate',
+    'compile',
+    'compile_to_code',
+)
 
 
-def validate(definition, data, handlers={}, formats={}):
+def validate(definition, data, handlers={}, formats={}, use_default=True):
     """
     Validation function for lazy programmers or for use cases, when you need
     to call validation only once, so you do not have to compile it first.
@@ -102,11 +111,12 @@ def validate(definition, data, handlers={}, formats={}):
 
     Preferred is to use :any:`compile` function.
     """
-    return compile(definition, handlers, formats)(data)
+    return compile(definition, handlers, formats, use_default)(data)
 
 
+#TODO: Change use_default to False when upgrading to version 3.
 # pylint: disable=redefined-builtin,dangerous-default-value,exec-used
-def compile(definition, handlers={}, formats={}):
+def compile(definition, handlers={}, formats={}, use_default=True):
     """
     Generates validation function for validating JSON schema passed in ``definition``.
     Example:
@@ -118,7 +128,8 @@ def compile(definition, handlers={}, formats={}):
         validate = fastjsonschema.compile({'type': 'string'})
         validate('hello')
 
-    This implementation support keyword ``default``:
+    This implementation supports keyword ``default`` (can be turned off
+    by passing `use_default=False`):
 
     .. code-block:: python
 
@@ -160,18 +171,21 @@ def compile(definition, handlers={}, formats={}):
     Exception :any:`JsonSchemaDefinitionException` is raised when generating the
     code fails (bad definition).
 
-    Exception :any:`JsonSchemaException` is raised from generated funtion when
+    Exception :any:`JsonSchemaValueException` is raised from generated function when
     validation fails (data do not follow the definition).
     """
-    resolver, code_generator = _factory(definition, handlers, formats)
+    resolver, code_generator = _factory(definition, handlers, formats, use_default)
     global_state = code_generator.global_state
     # Do not pass local state so it can recursively call itself.
     exec(code_generator.func_code, global_state)
-    return global_state[resolver.get_scope_name()]
+    func = global_state[resolver.get_scope_name()]
+    if formats:
+        return update_wrapper(partial(func, custom_formats=formats), func)
+    return func
 
 
 # pylint: disable=dangerous-default-value
-def compile_to_code(definition, handlers={}, formats={}):
+def compile_to_code(definition, handlers={}, formats={}, use_default=True):
     """
     Generates validation code for validating JSON schema passed in ``definition``.
     Example:
@@ -194,7 +208,7 @@ def compile_to_code(definition, handlers={}, formats={}):
     Exception :any:`JsonSchemaDefinitionException` is raised when generating the
     code fails (bad definition).
     """
-    _, code_generator = _factory(definition, handlers, formats)
+    _, code_generator = _factory(definition, handlers, formats, use_default)
     return (
         'VERSION = "' + VERSION + '"\n' +
         code_generator.global_state_code + '\n' +
@@ -202,9 +216,14 @@ def compile_to_code(definition, handlers={}, formats={}):
     )
 
 
-def _factory(definition, handlers, formats={}):
-    resolver = RefResolver.from_schema(definition, handlers=handlers)
-    code_generator = _get_code_generator_class(definition)(definition, resolver=resolver, formats=formats)
+def _factory(definition, handlers, formats={}, use_default=True):
+    resolver = RefResolver.from_schema(definition, handlers=handlers, store={})
+    code_generator = _get_code_generator_class(definition)(
+        definition,
+        resolver=resolver,
+        formats=formats,
+        use_default=use_default,
+    )
     return resolver, code_generator
 
 

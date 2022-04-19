@@ -6,12 +6,18 @@ SPLIT_RE = re.compile(r'[\.\[\]]+')
 
 class JsonSchemaException(ValueError):
     """
+    Base exception of ``fastjsonschema`` library.
+    """
+
+
+class JsonSchemaValueException(JsonSchemaException):
+    """
     Exception raised by validation function. Available properties:
 
      * ``message`` containing human-readable information what is wrong (e.g. ``data.property[index] must be smaller than or equal to 42``),
      * invalid ``value`` (e.g. ``60``),
-     * ``name`` of a path in the data structure (e.g. ``data.propery[index]``),
-     * ``path`` as an array in the data structure (e.g. ``['data', 'propery', 'index']``),
+     * ``name`` of a path in the data structure (e.g. ``data.property[index]``),
+     * ``path`` as an array in the data structure (e.g. ``['data', 'property', 'index']``),
      * the whole ``definition`` which the ``value`` has to fulfil (e.g. ``{'type': 'number', 'maximum': 42}``),
      * ``rule`` which the ``value`` is breaking (e.g. ``maximum``)
      * and ``rule_definition`` (e.g. ``42``).

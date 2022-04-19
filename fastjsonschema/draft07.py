@@ -17,8 +17,8 @@ class CodeGeneratorDraft07(CodeGeneratorDraft06):
         ),
     })
 
-    def __init__(self, definition, resolver=None, formats={}):
-        super().__init__(definition, resolver, formats)
+    def __init__(self, definition, resolver=None, formats={}, use_default=True):
+        super().__init__(definition, resolver, formats, use_default)
         # pylint: disable=duplicate-code
         self._json_keywords_to_function.update((
             ('if', self.generate_if_then_else),
@@ -46,14 +46,14 @@ class CodeGeneratorDraft07(CodeGeneratorDraft06):
 
         Valid values are any between -10 and 0 or any multiplication of two.
         """
-        with self.l('try:'):
+        with self.l('try:', optimize=False):
             self.generate_func_code_block(
                 self._definition['if'],
                 self._variable,
                 self._variable_name,
                 clear_variables=True
             )
-        with self.l('except JsonSchemaException:'):
+        with self.l('except JsonSchemaValueException:'):
             if 'else' in self._definition:
                 self.generate_func_code_block(
                     self._definition['else'],

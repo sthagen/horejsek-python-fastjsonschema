@@ -26,7 +26,7 @@ class CodeGeneratorDraft04(CodeGenerator):
     # vs. 9 ms with a regex! Other modules are also ineffective or not available in standard
     # library. Some regexps are not 100% precise but good enough, fast and without dependencies.
     FORMAT_REGEXS = {
-        'date-time': r'^\d{4}-[01]\d-[0-3]\d(t|T)[0-2]\d:[0-5]\d:[0-5]\d(?:\.\d+)?(?:[+-][0-2]\d:[0-5]\d|z|Z)\Z',
+        'date-time': r'^\d{4}-[01]\d-[0-3]\d(t|T)[0-2]\d:[0-5]\d:[0-5]\d(?:\.\d+)?(?:[+-][0-2]\d:[0-5]\d|[+-][0-2]\d[0-5]\d|z|Z)\Z',
         'email': r'^[^@]+@[^@]+\.[^@]+\Z',
         'hostname': r'^(([a-zA-Z0-9]|[a-zA-Z0-9][a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])\.)*([A-Za-z0-9]|[A-Za-z0-9][A-Za-z0-9\-]{0,61}[A-Za-z0-9])\Z',
         'ipv4': r'^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\Z',
@@ -34,9 +34,10 @@ class CodeGeneratorDraft04(CodeGenerator):
         'uri': r'^\w+:(\/?\/?)[^\s]+\Z',
     }
 
-    def __init__(self, definition, resolver=None, formats={}):
+    def __init__(self, definition, resolver=None, formats={}, use_default=True):
         super().__init__(definition, resolver)
         self._custom_formats = formats
+        self._use_default = use_default
         self._json_keywords_to_function.update((
             ('type', self.generate_type),
             ('enum', self.generate_enum),
@@ -64,6 +65,7 @@ class CodeGeneratorDraft04(CodeGenerator):
             ('patternProperties', self.generate_pattern_properties),
             ('additionalProperties', self.generate_additional_properties),
         ))
+        self._any_or_one_of_count = 0
 
     @property
     def global_state(self):
@@ -144,17 +146,19 @@ class CodeGeneratorDraft04(CodeGenerator):
 
         Valid values for this definition are 3, 4, 5, 10, 11, ... but not 8 for example.
         """
-        self.l('{variable}_any_of_count = 0')
+        self._any_or_one_of_count += 1
+        count = self._any_or_one_of_count
+        self.l('{variable}_any_of_count{count} = 0', count=count)
         for definition_item in self._definition['anyOf']:
             # When we know it's passing (at least once), we do not need to do another expensive try-except.
-            with self.l('if not {variable}_any_of_count:', optimize=False):
+            with self.l('if not {variable}_any_of_count{count}:', count=count, optimize=False):
                 with self.l('try:', optimize=False):
                     self.generate_func_code_block(definition_item, self._variable, self._variable_name, clear_variables=True)
-                    self.l('{variable}_any_of_count += 1')
-                self.l('except JsonSchemaException: pass')
+                    self.l('{variable}_any_of_count{count} += 1', count=count)
+                self.l('except JsonSchemaValueException: pass')
 
-        with self.l('if not {variable}_any_of_count:', optimize=False):
-            self.exc('{name} must be valid by one of anyOf definition', rule='anyOf')
+        with self.l('if not {variable}_any_of_count{count}:', count=count, optimize=False):
+            self.exc('{name} cannot be validated by any definition', rule='anyOf')
 
     def generate_one_of(self):
         """
@@ -172,17 +176,20 @@ class CodeGeneratorDraft04(CodeGenerator):
 
         Valid values for this definition are 3, 5, 6, ... but not 15 for example.
         """
-        self.l('{variable}_one_of_count = 0')
+        self._any_or_one_of_count += 1
+        count = self._any_or_one_of_count
+        self.l('{variable}_one_of_count{count} = 0', count=count)
         for definition_item in self._definition['oneOf']:
             # When we know it's failing (one of means exactly once), we do not need to do another expensive try-except.
-            with self.l('if {variable}_one_of_count < 2:', optimize=False):
+            with self.l('if {variable}_one_of_count{count} < 2:', count=count, optimize=False):
                 with self.l('try:', optimize=False):
                     self.generate_func_code_block(definition_item, self._variable, self._variable_name, clear_variables=True)
-                    self.l('{variable}_one_of_count += 1')
-                self.l('except JsonSchemaException: pass')
+                    self.l('{variable}_one_of_count{count} += 1', count=count)
+                self.l('except JsonSchemaValueException: pass')
 
-        with self.l('if {variable}_one_of_count != 1:'):
-            self.exc('{name} must be valid exactly by one of oneOf definition', rule='oneOf')
+        with self.l('if {variable}_one_of_count{count} != 1:', count=count):
+            dynamic = '" (" + str({variable}_one_of_count{}) + " matches found)"'
+            self.exc('{name} must be valid exactly by one definition', count, append_to_msg=dynamic, rule='oneOf')
 
     def generate_not(self):
         """
@@ -204,13 +211,13 @@ class CodeGeneratorDraft04(CodeGenerator):
             return
         elif not not_definition:
             with self.l('if {}:', self._variable):
-                self.exc('{name} must not be valid by not definition', rule='not')
+                self.exc('{name} must NOT match a disallowed definition', rule='not')
         else:
             with self.l('try:', optimize=False):
                 self.generate_func_code_block(not_definition, self._variable, self._variable_name)
-            self.l('except JsonSchemaException: pass')
+            self.l('except JsonSchemaValueException: pass')
             with self.l('else:'):
-                self.exc('{name} must not be valid by not definition', rule='not')
+                self.exc('{name} must NOT match a disallowed definition', rule='not')
 
     def generate_min_length(self):
         with self.l('if isinstance({variable}, str):'):
@@ -349,8 +356,16 @@ class CodeGeneratorDraft04(CodeGenerator):
         """
         self.create_variable_is_list()
         with self.l('if {variable}_is_list:'):
+            self.l(
+                'def fn(var): '
+                'return frozenset(dict((k, fn(v)) '
+                'for k, v in var.items()).items()) '
+                'if hasattr(var, "items") else tuple(fn(v) '
+                'for v in var) '
+                'if isinstance(var, (dict, list)) else str(var) '
+                'if isinstance(var, bool) else var')
             self.create_variable_with_length()
-            with self.l('if {variable}_len > len(set(str({variable}_x) for {variable}_x in {variable})):'):
+            with self.l('if {variable}_len > len(set(fn({variable}_x) for {variable}_x in {variable})):'):
                 self.exc('{name} must contain unique items', rule='uniqueItems')
 
     def generate_items(self):
@@ -390,7 +405,7 @@ class CodeGeneratorDraft04(CodeGenerator):
                             '{}__{}'.format(self._variable, idx),
                             '{}[{}]'.format(self._variable_name, idx),
                         )
-                    if isinstance(item_definition, dict) and 'default' in item_definition:
+                    if self._use_default and isinstance(item_definition, dict) and 'default' in item_definition:
                         self.l('else: {variable}.append({})', repr(item_definition['default']))
 
                 if 'additionalItems' in self._definition:
@@ -399,19 +414,23 @@ class CodeGeneratorDraft04(CodeGenerator):
                             self.exc('{name} must contain only specified items', rule='items')
                     else:
                         with self.l('for {variable}_x, {variable}_item in enumerate({variable}[{0}:], {0}):', len(items_definition)):
-                            self.generate_func_code_block(
+                            count = self.generate_func_code_block(
                                 self._definition['additionalItems'],
                                 '{}_item'.format(self._variable),
                                 '{}[{{{}_x}}]'.format(self._variable_name, self._variable),
                             )
+                            if count == 0:
+                                self.l('pass')
             else:
                 if items_definition:
                     with self.l('for {variable}_x, {variable}_item in enumerate({variable}):'):
-                        self.generate_func_code_block(
+                        count = self.generate_func_code_block(
                             items_definition,
                             '{}_item'.format(self._variable),
                             '{}[{{{}_x}}]'.format(self._variable_name, self._variable),
                         )
+                        if count == 0:
+                            self.l('pass')
 
     def generate_min_properties(self):
         self.create_variable_is_dict()
@@ -470,7 +489,7 @@ class CodeGeneratorDraft04(CodeGenerator):
                         '{}.{}'.format(self._variable_name, self.e(key)),
                         clear_variables=True,
                     )
-                if isinstance(prop_definition, dict) and 'default' in prop_definition:
+                if self._use_default and isinstance(prop_definition, dict) and 'default' in prop_definition:
                     self.l('else: {variable}["{}"] = {}', self.e(key), repr(prop_definition['default']))
 
     def generate_pattern_properties(self):
@@ -524,9 +543,9 @@ class CodeGeneratorDraft04(CodeGenerator):
         with self.l('if {variable}_is_dict:'):
             self.create_variable_keys()
             add_prop_definition = self._definition["additionalProperties"]
-            if add_prop_definition == True:
+            if add_prop_definition is True or add_prop_definition == {}:
                 return
-            elif add_prop_definition:
+            if add_prop_definition:
                 properties_keys = list(self._definition.get("properties", {}).keys())
                 with self.l('for {variable}_key in {variable}_keys:'):
                     with self.l('if {variable}_key not in {}:', properties_keys):
@@ -560,11 +579,11 @@ class CodeGeneratorDraft04(CodeGenerator):
         """
         self.create_variable_is_dict()
         with self.l('if {variable}_is_dict:'):
-            isEmpty = True
+            is_empty = True
             for key, values in self._definition["dependencies"].items():
                 if values == [] or values is True:
                     continue
-                isEmpty = False
+                is_empty = False
                 with self.l('if "{}" in {variable}:', self.e(key)):
                     if values is False:
                         self.exc('{} in {name} must not be there', key, rule='dependencies')
@@ -574,5 +593,5 @@ class CodeGeneratorDraft04(CodeGenerator):
                                 self.exc('{name} missing dependency {} for {}', self.e(value), self.e(key), rule='dependencies')
                     else:
                         self.generate_func_code_block(values, self._variable, self._variable_name, clear_variables=True)
-            if isEmpty:
+            if is_empty:
                 self.l('pass')
