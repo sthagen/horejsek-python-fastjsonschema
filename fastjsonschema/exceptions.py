@@ -45,6 +45,16 @@ class JsonSchemaValueException(JsonSchemaException):
         return self.definition.get(self.rule)
 
 
+class JsonSchemaValuesException(JsonSchemaException):
+    """
+    Exception raised by validation function. It is a collection of all errors.
+    """
+
+    def __init__(self, errors):
+        super().__init__()
+        self.errors = errors
+
+
 class JsonSchemaDefinitionException(JsonSchemaException):
     """
     Exception raised by generator of validation function.

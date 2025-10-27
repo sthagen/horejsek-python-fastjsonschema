@@ -110,7 +110,7 @@ from functools import partial, update_wrapper
 from .draft04 import CodeGeneratorDraft04
 from .draft06 import CodeGeneratorDraft06
 from .draft07 import CodeGeneratorDraft07
-from .exceptions import JsonSchemaException, JsonSchemaValueException, JsonSchemaDefinitionException
+from .exceptions import JsonSchemaException, JsonSchemaValueException, JsonSchemaValuesException, JsonSchemaDefinitionException
 from .ref_resolver import RefResolver
 from .version import VERSION
 
@@ -118,6 +118,7 @@ __all__ = (
     'VERSION',
     'JsonSchemaException',
     'JsonSchemaValueException',
+    'JsonSchemaValuesException',
     'JsonSchemaDefinitionException',
     'validate',
     'compile',
@@ -125,7 +126,7 @@ __all__ = (
 )
 
 
-def validate(definition, data, handlers={}, formats={}, use_default=True, use_formats=True, detailed_exceptions=True):
+def validate(definition, data, handlers={}, formats={}, use_default=True, use_formats=True, detailed_exceptions=True, fast_fail=True):
     """
     Validation function for lazy programmers or for use cases when you need
     to call validation only once, so you do not have to compile it first.
@@ -141,12 +142,12 @@ def validate(definition, data, handlers={}, formats={}, use_default=True, use_fo
 
     Preferred is to use :any:`compile` function.
     """
-    return compile(definition, handlers, formats, use_default, use_formats, detailed_exceptions)(data)
+    return compile(definition, handlers, formats, use_default, use_formats, detailed_exceptions, fast_fail)(data)
 
 
 #TODO: Change use_default to False when upgrading to version 3.
 # pylint: disable=redefined-builtin,dangerous-default-value,exec-used
-def compile(definition, handlers={}, formats={}, use_default=True, use_formats=True, detailed_exceptions=True):
+def compile(definition, handlers={}, formats={}, use_default=True, use_formats=True, detailed_exceptions=True, fast_fail=True):
     """
     Generates validation function for validating JSON schema passed in ``definition``.
     Example:
@@ -205,13 +206,20 @@ def compile(definition, handlers={}, formats={}, use_default=True, use_formats=T
     If you don't need detailed exceptions, you can turn the details off and gain
     additional performance by passing `detailed_exceptions=False`.
 
+    By default, the execution stops with the first validation error. If you need
+    to collect all the errors, turn this off by passing `fast_fail=False`.
+
     Exception :any:`JsonSchemaDefinitionException` is raised when generating the
     code fails (bad definition).
 
     Exception :any:`JsonSchemaValueException` is raised from generated function when
     validation fails (data do not follow the definition).
+
+    Exception :any:`JsonSchemaValuesException` is raised from generated function when
+    validation fails (data do not follow the definition) contatining all the errors
+    (when fast_fail is set to `False`).
     """
-    resolver, code_generator = _factory(definition, handlers, formats, use_default, use_formats, detailed_exceptions)
+    resolver, code_generator = _factory(definition, handlers, formats, use_default, use_formats, detailed_exceptions, fast_fail)
     global_state = code_generator.global_state
     # Do not pass local state so it can recursively call itself.
     exec(code_generator.func_code, global_state)
@@ -222,7 +230,7 @@ def compile(definition, handlers={}, formats={}, use_default=True, use_formats=T
 
 
 # pylint: disable=dangerous-default-value
-def compile_to_code(definition, handlers={}, formats={}, use_default=True, use_formats=True, detailed_exceptions=True):
+def compile_to_code(definition, handlers={}, formats={}, use_default=True, use_formats=True, detailed_exceptions=True, fast_fail=True):
     """
     Generates validation code for validating JSON schema passed in ``definition``.
     Example:
@@ -245,7 +253,7 @@ def compile_to_code(definition, handlers={}, formats={}, use_default=True, use_f
     Exception :any:`JsonSchemaDefinitionException` is raised when generating the
     code fails (bad definition).
     """
-    _, code_generator = _factory(definition, handlers, formats, use_default, use_formats, detailed_exceptions)
+    _, code_generator = _factory(definition, handlers, formats, use_default, use_formats, detailed_exceptions, fast_fail)
     return (
         'VERSION = "' + VERSION + '"\n' +
         code_generator.global_state_code + '\n' +
@@ -253,7 +261,7 @@ def compile_to_code(definition, handlers={}, formats={}, use_default=True, use_f
     )
 
 
-def _factory(definition, handlers, formats={}, use_default=True, use_formats=True, detailed_exceptions=True):
+def _factory(definition, handlers, formats={}, use_default=True, use_formats=True, detailed_exceptions=True, fast_fail=True):
     resolver = RefResolver.from_schema(definition, handlers=handlers, store={})
     code_generator = _get_code_generator_class(definition)(
         definition,
@@ -262,6 +270,7 @@ def _factory(definition, handlers, formats={}, use_default=True, use_formats=Tru
         use_default=use_default,
         use_formats=use_formats,
         detailed_exceptions=detailed_exceptions,
+        fast_fail=fast_fail,
     )
     return resolver, code_generator
 

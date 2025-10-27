@@ -2,7 +2,7 @@ from collections import OrderedDict
 from decimal import Decimal
 import re
 
-from .exceptions import JsonSchemaValueException, JsonSchemaDefinitionException
+from .exceptions import JsonSchemaValueException, JsonSchemaValuesException, JsonSchemaDefinitionException
 from .indent import indent
 from .ref_resolver import RefResolver
 
@@ -29,11 +29,12 @@ class CodeGenerator:
 
     INDENT = 4  # spaces
 
-    def __init__(self, definition, resolver=None, detailed_exceptions=True):
+    def __init__(self, definition, resolver=None, detailed_exceptions=True, fast_fail=True):
         self._code = []
         self._compile_regexps = {}
         self._custom_formats = {}
         self._detailed_exceptions = detailed_exceptions
+        self._fast_fail = fast_fail
 
         # Any extra library should be here to be imported only once.
         # Lines are imports to be printed in the file and objects
@@ -91,6 +92,7 @@ class CodeGenerator:
             REGEX_PATTERNS=self._compile_regexps,
             re=re,
             JsonSchemaValueException=JsonSchemaValueException,
+            JsonSchemaValuesException=JsonSchemaValuesException,
         )
 
     @property
@@ -103,13 +105,13 @@ class CodeGenerator:
 
         if not self._compile_regexps:
             return '\n'.join(self._extra_imports_lines + [
-                'from fastjsonschema import JsonSchemaValueException',
+                'from fastjsonschema import JsonSchemaValueException, JsonSchemaValuesException',
                 '',
                 '',
             ])
         return '\n'.join(self._extra_imports_lines + [
             'import re',
-            'from fastjsonschema import JsonSchemaValueException',
+            'from fastjsonschema import JsonSchemaValueException, JsonSchemaValuesException',
             '',
             '',
             'REGEX_PATTERNS = ' + serialize_regexes(self._compile_regexps),
@@ -143,7 +145,11 @@ class CodeGenerator:
         self.l('')
         with self._resolver.resolving(uri) as definition:
             with self.l('def {}(data, custom_formats={{}}, name_prefix=None):', name):
+                if not self._fast_fail:
+                    self.l('errors = []')
                 self.generate_func_code_block(definition, 'data', 'data', clear_variables=True)
+                if not self._fast_fail:
+                    self.l('if errors: raise JsonSchemaValuesException(errors)')
                 self.l('return data')
 
     def generate_func_code_block(self, definition, variable, variable_name, clear_variables=False):
@@ -268,13 +274,20 @@ class CodeGenerator:
         Short-cut for creating raising exception in the code.
         """
         if not self._detailed_exceptions:
-            self.l('raise JsonSchemaValueException("'+msg+'")', *args)
+            if self._fast_fail:
+                self.l('raise JsonSchemaValueException("'+msg+'")', *args)
+            else:
+                self.l('errors.append(JsonSchemaValueException("'+msg+'"))', *args)
             return
 
         arg = '"'+msg+'"'
         if append_to_msg:
             arg += ' + (' + append_to_msg + ')'
-        msg = 'raise JsonSchemaValueException('+arg+', value={variable}, name="{name}", definition={definition}, rule={rule})'
+        msg = (
+            'raise JsonSchemaValueException('+arg+', value={variable}, name="{name}", definition={definition}, rule={rule})'
+            if self._fast_fail else
+            'errors.append(JsonSchemaValueException('+arg+', value={variable}, name="{name}", definition={definition}, rule={rule}))'
+        )
         definition = self._expand_refs(self._definition)
         definition_rule = self.e(definition.get(rule) if isinstance(definition, dict) else None)
         self.l(msg, *args, definition=repr(definition), rule=repr(rule), definition_rule=definition_rule)
