@@ -84,14 +84,14 @@ class CodeGeneratorDraft06(CodeGeneratorDraft04):
             self.exc('{name} must be {}', ' or '.join(types), rule='type')
 
     def generate_exclusive_minimum(self):
-        with self.l('if isinstance({variable}, (int, float, Decimal)):'):
+        with self.l('if isinstance({variable}, (int, float, Decimal)) and not isinstance({variable}, bool):'):
             if not isinstance(self._definition['exclusiveMinimum'], (int, float, decimal.Decimal)):
                 raise JsonSchemaDefinitionException('exclusiveMinimum must be an integer, a float or a decimal')
             with self.l('if {variable} <= {exclusiveMinimum}:'):
                 self.exc('{name} must be bigger than {exclusiveMinimum}', rule='exclusiveMinimum')
 
     def generate_exclusive_maximum(self):
-        with self.l('if isinstance({variable}, (int, float, Decimal)):'):
+        with self.l('if isinstance({variable}, (int, float, Decimal)) and not isinstance({variable}, bool):'):
             if not isinstance(self._definition['exclusiveMaximum'], (int, float, decimal.Decimal)):
                 raise JsonSchemaDefinitionException('exclusiveMaximum must be an integer, a float or a decimal')
             with self.l('if {variable} >= {exclusiveMaximum}:'):
@@ -115,8 +115,8 @@ class CodeGeneratorDraft06(CodeGeneratorDraft04):
         if property_names_definition is True:
             pass
         elif property_names_definition is False:
-            self.create_variable_keys()
-            with self.l('if {variable}_keys:'):
+            self.create_variable_is_dict()
+            with self.l('if {variable}_is_dict and {variable}:'):
                 self.exc('{name} must not be there', rule='propertyNames')
         else:
             self.create_variable_is_dict()

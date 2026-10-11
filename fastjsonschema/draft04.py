@@ -336,7 +336,7 @@ class CodeGeneratorDraft04(CodeGenerator):
                 self.exc('{name} must be {}', format_name, rule='format')
 
     def generate_minimum(self):
-        with self.l('if isinstance({variable}, (int, float, Decimal)):'):
+        with self.l('if isinstance({variable}, (int, float, Decimal)) and not isinstance({variable}, bool):'):
             if not isinstance(self._definition['minimum'], (int, float, decimal.Decimal)):
                 raise JsonSchemaDefinitionException('minimum must be a number')
             if self._definition.get('exclusiveMinimum', False):
@@ -347,7 +347,7 @@ class CodeGeneratorDraft04(CodeGenerator):
                     self.exc('{name} must be bigger than or equal to {minimum}', rule='minimum')
 
     def generate_maximum(self):
-        with self.l('if isinstance({variable}, (int, float, Decimal)):'):
+        with self.l('if isinstance({variable}, (int, float, Decimal)) and not isinstance({variable}, bool):'):
             if not isinstance(self._definition['maximum'], (int, float, decimal.Decimal)):
                 raise JsonSchemaDefinitionException('maximum must be a number')
             if self._definition.get('exclusiveMaximum', False):
@@ -358,7 +358,7 @@ class CodeGeneratorDraft04(CodeGenerator):
                     self.exc('{name} must be smaller than or equal to {maximum}', rule='maximum')
 
     def generate_multiple_of(self):
-        with self.l('if isinstance({variable}, (int, float, Decimal)):'):
+        with self.l('if isinstance({variable}, (int, float, Decimal)) and not isinstance({variable}, bool):'):
             if not isinstance(self._definition['multipleOf'], (int, float, decimal.Decimal)):
                 raise JsonSchemaDefinitionException('multipleOf must be a number')
             # For proper multiplication check of floats we need to use decimals,
@@ -557,7 +557,7 @@ class CodeGeneratorDraft04(CodeGenerator):
                     self.generate_func_code_block(
                         prop_definition,
                         '{}__{}'.format(self._variable, key_name),
-                        '{}.{}'.format(self._variable_name, self.e(key)),
+                        '{}.{}'.format(self._variable_name, self.e(key).replace('{', '{{').replace('}', '}}')),
                         clear_variables=True,
                     )
                 if self._use_default and isinstance(prop_definition, dict) and 'default' in prop_definition:
